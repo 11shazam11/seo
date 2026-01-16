@@ -1,12 +1,16 @@
 {
   "rewrites": [
     {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
+    {
       "source": "/(.*)",
       "has": [
         {
           "type": "header",
           "key": "user-agent",
-          "value": ".*(Twitterbot|facebookexternalhit|Facebot|Slackbot|Discordbot|LinkedInBot|WhatsApp|TelegramBot|Googlebot|bingbot).*"
+          "value": ".*(Twitterbot|facebookexternalhit|Facebot|FacebookBot|Slackbot|Discordbot|LinkedInBot|WhatsApp|TelegramBot|Googlebot|bingbot|meta-externalagent|meta-externalfetcher).*"
         }
       ],
       "destination": "/api/social-preview?path=/$1"

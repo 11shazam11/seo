@@ -10,30 +10,53 @@ function escapeHtml(s: string) {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-    const imageUrl = 'https://imgs.search.brave.com/Zx_AlxGGgfBiNIt49IApxNwOWsXyzMe6WFxdpph2kg0/rs:fit:500:0:1:0/g:ce/aHR0cHM6Ly9pbWFn/ZXMuYWxwaGFjb2Rl/cnMuY29tLzEzOS90/aHVtYmJpZy0xMzk0/ODYyLndlYnA'
+  const imageUrl =
+    "https://imgs.search.brave.com/Zx_AlxGGgfBiNIt49IApxNwOWsXyzMe6WFxdpph2kg0/rs:fit:500:0:1:0/g:ce/aHR0cHM6Ly9pbWFn/ZXMuYWxwaGFjb2Rl/cnMuY29tLzEzOS90/aHVtYmJpZy0xMzk0/ODYyLndlYnA";
+
+  let title = "";
+  let description = "";
+  let image = "";
+  let url = "";
   // Example: /product/123 or /quest/my-slug
   const path = String(req.query.path ?? "/");
-  const siteUrl = process.env.SITE_URL || "https://YOUR_DOMAIN";
+  if (path == "/quest1") {
+    title = "ONE PIECE";
+    description = "Finding the one pieace and be the pirate king";
+    image =
+      "https://sm.ign.com/t/ign_in/lists/h/how-to-wat/how-to-watch-one-piece-in-order-including-movies_djqc.2560.jpg";
+    url = "https://seo-sbma.vercel.app/quest1";
+  } else {
+    title = "VALORANT";
+    description = "A free to play game fps shooter game";
+    image =
+      "https://images.wallpapersden.com/image/wxl-fade-valorant-2024-gaming_92799.jpg";
+    url = "https://seo-sbma.vercel.app/quest2";
+  }
+
+  const siteUrl = process.env.SITE_URL || "https://seo-sbma.vercel.app/";
 
   // TODO: Replace this with your real data source:
   // - fetch from your backend
   // - fetch from a public JSON endpoint
   // - read from DB
-  const title = path.startsWith("/product/")
-    ? `Product page ${path.split("/").pop()}`
-    : "My App";
+  //   const title = path.startsWith("/product/")
+  //     ? `Product page ${path.split("/").pop()}`
+  //     : "My App";
 
-  const description = path.startsWith("/product/")
-    ? "Buy this amazing product."
-    : "My app description";
+  //   const description = path.startsWith("/product/")
+  //     ? "Buy this amazing product."
+  //     : "My app description";
 
-  const image = `${siteUrl}/og-default.png`;
-  const url = `${siteUrl}${path}`;
+  //   const image = `${siteUrl}/og-default.png`;
+  //   const url = `${siteUrl}${path}`;
 
   // Cache on Vercel CDN to reduce function hits (seconds)
   // Vercel caching guidance: s-maxage + optional stale-while-revalidate :contentReference[oaicite:0]{index=0}
   res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("Cache-Control", "public, max-age=0, s-maxage=3600, stale-while-revalidate=86400");
+  res.setHeader(
+    "Cache-Control",
+    "public, max-age=0, s-maxage=3600, stale-while-revalidate=86400"
+  );
 
   const html = `<!doctype html>
 <html lang="en">

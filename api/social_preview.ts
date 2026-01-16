@@ -19,21 +19,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let url = "";
   // Example: /product/123 or /quest/my-slug
   const path = String(req.query.path ?? "/");
-  if (path == "/quest1") {
+  const siteUrl = process.env.SITE_URL || "https://seo-sbma.vercel.app/";
+
+  if (path === "/quest1") {
     title = "ONE PIECE";
     description = "Finding the one pieace and be the pirate king";
     image =
       "https://sm.ign.com/t/ign_in/lists/h/how-to-wat/how-to-watch-one-piece-in-order-including-movies_djqc.2560.jpg";
-    url = "https://seo-sbma.vercel.app/quest1";
-  } else {
+  } else if (path === "/quest2") {
     title = "VALORANT";
     description = "A free to play game fps shooter game";
     image =
       "https://images.wallpapersden.com/image/wxl-fade-valorant-2024-gaming_92799.jpg";
-    url = "https://seo-sbma.vercel.app/quest2";
+  } else {
+    title = "My App";
+    description = "My app description";
+    image = imageUrl;
   }
 
-  const siteUrl = process.env.SITE_URL || "https://seo-sbma.vercel.app/";
+  url = `${siteUrl}${path.slice(1)}`;
 
   // TODO: Replace this with your real data source:
   // - fetch from your backend

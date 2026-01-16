@@ -5,7 +5,7 @@ import './index.css'
 // Apollo v4+ React 19 imports (✅ WORKS)
 import { ApolloClient, InMemoryCache } from '@apollo/client/core'
 import { ApolloProvider } from '@apollo/client/react'
-import { HttpLink,gql } from '@apollo/client'
+import { HttpLink } from '@apollo/client'
 import App from './App.tsx'
 
 const client = new ApolloClient({

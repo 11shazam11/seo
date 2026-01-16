@@ -9,58 +9,59 @@ function escapeHtml(s: string) {
     .replaceAll("'", "&#039;");
 }
 
+function normalizeSiteUrl(raw: string) {
+  // remove trailing slashes so `${siteUrl}/file.png` is always correct
+  return raw.replace(/\/+$/, "");
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const imageUrl =
-    "https://imgs.search.brave.com/Zx_AlxGGgfBiNIt49IApxNwOWsXyzMe6WFxdpph2kg0/rs:fit:500:0:1:0/g:ce/aHR0cHM6Ly9pbWFn/ZXMuYWxwaGFjb2Rl/cnMuY29tLzEzOS90/aHVtYmJpZy0xMzk0/ODYyLndlYnA";
+  // IMPORTANT: for OG tags, images should be absolute URLs
+  const siteUrl = normalizeSiteUrl(
+    process.env.SITE_URL || "https://seo-sbma.vercel.app"
+  );
+
+  // Example: /quest1 or /quest2 (coming from your rewrite into ?path=...)
+  const path = String(req.query.path ?? "/");
 
   let title = "";
   let description = "";
   let image = "";
-  let url = "";
-  // Example: /product/123 or /quest/my-slug
-  const path = String(req.query.path ?? "/");
-  const siteUrl = process.env.SITE_URL || "https://seo-sbma.vercel.app/";
 
-  if (path === "/quest1") {
+  // ✅ Use images from /public as: https://domain.com/<filename>
+  // Put these files in your React /public folder:
+  // - public/q1.png
+  // - public/q2.png
+  // - public/og-default.png
+  if (path === "/quest12") {
     title = "ONE PIECE";
     description = "Finding the one pieace and be the pirate king";
-    image =
-      "https://sm.ign.com/t/ign_in/lists/h/how-to-wat/how-to-watch-one-piece-in-order-including-movies_djqc.2560.jpg";
-  } else if (path === "/quest2") {
+    image = `${siteUrl}/q1.png`;
+  } else if (path === "/quest22") {
     title = "VALORANT";
     description = "A free to play game fps shooter game";
-    image =
-      "https://images.wallpapersden.com/image/wxl-fade-valorant-2024-gaming_92799.jpg";
+    image = `${siteUrl}/q2.png`;
   } else {
     title = "My App";
     description = "My app description";
-    image = imageUrl;
+    image = `${siteUrl}/og-default.png`;
   }
 
-  url = `${siteUrl}${path.slice(1)}`;
-
-  // TODO: Replace this with your real data source:
-  // - fetch from your backend
-  // - fetch from a public JSON endpoint
-  // - read from DB
-  //   const title = path.startsWith("/product/")
-  //     ? `Product page ${path.split("/").pop()}`
-  //     : "My App";
-
-  //   const description = path.startsWith("/product/")
-  //     ? "Buy this amazing product."
-  //     : "My app description";
-
-  //   const image = `${siteUrl}/og-default.png`;
-  //   const url = `${siteUrl}${path}`;
+  // ✅ canonical URL (avoid the old slice(1) bug)
+  const url = `${siteUrl}${path.startsWith("/") ? path : `/${path}`}`;
 
   // Cache on Vercel CDN to reduce function hits (seconds)
-  // Vercel caching guidance: s-maxage + optional stale-while-revalidate :contentReference[oaicite:0]{index=0}
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader(
     "Cache-Control",
     "public, max-age=0, s-maxage=3600, stale-while-revalidate=86400"
   );
+
+  // Optional Facebook app id (removes debugger warning if you set it)
+  const fbAppId = process.env.FB_APP_ID || "";
+
+  // Discord-friendly: include secure_url + width/height
+  const imageWidth = "1200";
+  const imageHeight = "630";
 
   const html = `<!doctype html>
 <html lang="en">
@@ -74,8 +75,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   <meta property="og:type" content="website" />
   <meta property="og:title" content="${escapeHtml(title)}" />
   <meta property="og:description" content="${escapeHtml(description)}" />
-  <meta property="og:image" content="${escapeHtml(image)}" />
   <meta property="og:url" content="${escapeHtml(url)}" />
+
+  <meta property="og:image" content="${escapeHtml(image)}" />
+  <meta property="og:image:secure_url" content="${escapeHtml(image)}" />
+  <meta property="og:image:width" content="${imageWidth}" />
+  <meta property="og:image:height" content="${imageHeight}" />
+
+  ${
+    fbAppId
+      ? `<meta property="fb:app_id" content="${escapeHtml(fbAppId)}" />`
+      : ""
+  }
 
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="${escapeHtml(title)}" />

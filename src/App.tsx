@@ -1,21 +1,9 @@
-import { useQuery, useMutation } from '@apollo/client/react';
-import { GET_USER, CREATE_USER } from './userquery'; // Adjust path
+import React from 'react'
 
-function App() {
-  const { data: userData, loading } = useQuery(GET_USER);
-  const [createUser] = useMutation(CREATE_USER);
-
-  if (loading) return <p>Loading...</p>;
-
+const App = () => {
   return (
-    <div>
-      {userData?.getUser && (
-        <p>Welcome, {userData.getUser.name}! ({userData.getUser.email})</p>
-      )}
-      <button onClick={() => createUser({ variables: { name: 'John', email: 'john@example.com' } })}>
-        Create User
-      </button>
-    </div>
-  );
+    <div>App</div>
+  )
 }
-export default App;
+
+export default App

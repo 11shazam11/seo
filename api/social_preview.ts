@@ -91,7 +91,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.log("Token not found");
   }
   // Quest id (fallback to a test id if missing)
-  const questId = extractQuestId(path) ?? 100001582;
+  const questId = extractQuestId(path) ?? 100001577;
 
   // Defaults
   let title = "My App";

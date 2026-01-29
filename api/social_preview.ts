@@ -578,11 +578,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const url = `${siteUrl}/quest/${TEST_QUEST_ID}`;
 
+  // res.setHeader("Content-Type", "text/html; charset=utf-8");
+  // res.setHeader(
+  //   "Cache-Control",
+  //   "public, max-age=0, s-maxage=3600, stale-while-revalidate=86400",
+  // );
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader(
     "Cache-Control",
-    "public, max-age=0, s-maxage=3600, stale-while-revalidate=86400",
+    "no-store, no-cache, must-revalidate, max-age=0",
   );
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
 
   const fbAppId = process.env.FB_APP_ID || "";
   const imageWidth = "1200";

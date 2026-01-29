@@ -18,45 +18,75 @@ function normalizePath(p: unknown) {
   return s.startsWith("/") ? s : `/${s}`;
 }
 
-/**
- * Extract id from: /quest/100001577, /quest12, /12, etc.
- */
-function extractQuestIdFromString(s: string): number | null {
-  const m = String(s || "").match(/(\d+)/);
+function redactToken(tok: string) {
+  if (!tok) return "";
+  const t = String(tok);
+  if (t.length <= 8) return "****";
+  return `${t.slice(0, 3)}…${t.slice(-3)} (len=${t.length})`;
+}
+
+function extractDigits(s: string): number | null {
+  const m = String(s || "").match(/(\d{3,})/); // 3+ digits to avoid tiny matches
   if (!m) return null;
   const id = Number(m[1]);
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
-/**
- * Prefer: req.query.id (from rewrite). Fallback: req.query.path, then req.url.
- */
 function getQuestId(req: VercelRequest): number | null {
-  // 1) Best: /quest/:id rewritten to /api/render/quest?id=:id
+  // Prefer rewrite param: /quest/:id -> /api/social_preview?id=:id&path=/quest/:id
   const qid = req.query?.id;
   if (typeof qid === "string") {
-    const id = Number(qid);
-    if (Number.isFinite(id) && id > 0) return id;
+    const n = Number(qid);
+    if (Number.isFinite(n) && n > 0) return n;
   }
-  if (Array.isArray(qid) && qid.length) {
-    const id = Number(qid[0]);
-    if (Number.isFinite(id) && id > 0) return id;
+  if (Array.isArray(qid) && qid[0]) {
+    const n = Number(qid[0]);
+    if (Number.isFinite(n) && n > 0) return n;
   }
 
-  // 2) Fallback: old rewrite style ?path=/quest/100001577
+  // Fallback: ?path=/quest/100001577
   const qpath = req.query?.path;
-  if (typeof qpath === "string") {
-    const id = extractQuestIdFromString(qpath);
-    if (id) return id;
-  }
-  if (Array.isArray(qpath) && qpath.length) {
-    const id = extractQuestIdFromString(qpath[0]);
-    if (id) return id;
-  }
+  if (typeof qpath === "string") return extractDigits(qpath);
+  if (Array.isArray(qpath) && qpath[0]) return extractDigits(qpath[0]);
 
-  // 3) Fallback: parse req.url
-  const urlPath = String(req.url || "");
-  return extractQuestIdFromString(urlPath);
+  // Last fallback: req.url
+  return extractDigits(String(req.url || ""));
+}
+
+async function readGitHubErrorBody(res: Response) {
+  const ct = res.headers.get("content-type") || "";
+  try {
+    if (ct.includes("application/json")) {
+      const j: any = await res.json();
+      return {
+        message: j?.message ?? "",
+        documentation_url: j?.documentation_url ?? "",
+      };
+    }
+    const txt = await res.text();
+    return { message: txt.slice(0, 300), documentation_url: "" };
+  } catch {
+    return { message: "", documentation_url: "" };
+  }
+}
+
+function classifyGitHubAuthIssue(status: number, ghMessage: string) {
+  const msg = (ghMessage || "").toLowerCase();
+
+  if (status === 401) {
+    // Typical: "Bad credentials"
+    return "GitHub 401 Unauthorized: token is missing/invalid/expired (common message: Bad credentials).";
+  }
+  if (status === 403) {
+    if (msg.includes("rate limit")) {
+      return "GitHub 403 Forbidden: rate limit hit (token may be missing or too many requests).";
+    }
+    if (msg.includes("resource not accessible")) {
+      return "GitHub 403 Forbidden: token does not have access to this repo/resource.";
+    }
+    return "GitHub 403 Forbidden: access blocked (permissions, SSO, fine-grained token scope, or rate limits).";
+  }
+  return "";
 }
 
 async function fetchQuestJsonRaw(opts: {
@@ -68,8 +98,12 @@ async function fetchQuestJsonRaw(opts: {
 }) {
   const { owner, repo, ref, path, token } = opts;
 
+  // NOTE: GitHub "contents" endpoint expects path segments, not URL-encoded slashes.
+  // We should encode each segment, not the entire path.
+  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+
   const apiUrl =
-    `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}` +
+    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodedPath}` +
     `?ref=${encodeURIComponent(ref)}`;
 
   const res = await fetch(apiUrl, {
@@ -77,21 +111,22 @@ async function fetchQuestJsonRaw(opts: {
       Authorization: `Bearer ${token}`,
       Accept: "application/vnd.github.raw+json",
       "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "vercel-og-renderer",
+      "User-Agent": "vercel-social-preview",
     },
   });
 
   if (!res.ok) {
-    let details = "";
-    try {
-      const err = await res.json();
-      details = err?.message ? ` - ${err.message}` : "";
-    } catch {}
+    const err = await readGitHubErrorBody(res);
+    const hint = classifyGitHubAuthIssue(res.status, err.message);
+
     return {
       ok: false as const,
       status: res.status,
-      message: `GitHub fetch failed: ${res.status} ${res.statusText}${details}`,
+      statusText: res.statusText,
       apiUrl,
+      ghMessage: err.message || "",
+      ghDocs: err.documentation_url || "",
+      hint,
     };
   }
 
@@ -99,16 +134,24 @@ async function fetchQuestJsonRaw(opts: {
   return { ok: true as const, json, apiUrl };
 }
 
+function sendHtml(res: VercelResponse, html: string) {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  // while debugging, keep no-cache
+  res.setHeader(
+    "Cache-Control",
+    "no-store, no-cache, must-revalidate, max-age=0",
+  );
+  res.status(200).send(html);
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const siteUrl = normalizeSiteUrl(
     process.env.SITE_URL || "https://seo-sbma.vercel.app",
   );
 
-  // ✅ Extract questId from the real URL (via rewrite id param)
   const questId = getQuestId(req) ?? 100001577;
-
-  // ✅ The canonical public URL path should be /quest/<id>
   const publicPath = `/quest/${questId}`;
+  const canonicalUrl = `${siteUrl}${publicPath}`;
 
   // Env
   const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
@@ -116,57 +159,119 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const GITHUB_REPO = process.env.GITHUB_REPO || "";
   const GITHUB_REF = process.env.GITHUB_BRANCH || "main";
 
-  // Defaults
+  // Defaults for tags
   let title = "My App";
   let description = "My app description";
   let image = `${siteUrl}/og-default.png`;
 
-  if (GITHUB_TOKEN && GITHUB_OWNER && GITHUB_REPO) {
-    const filePath = `public/quests/${questId}.json`;
-
-    const gh = await fetchQuestJsonRaw({
+  const debug: Record<string, any> = {
+    questId,
+    canonicalUrl,
+    incoming: {
+      method: req.method,
+      url: req.url,
+      query: req.query,
+      ua: req.headers["user-agent"],
+    },
+    githubEnv: {
+      hasToken: Boolean(GITHUB_TOKEN),
+      token: redactToken(GITHUB_TOKEN),
       owner: GITHUB_OWNER,
       repo: GITHUB_REPO,
       ref: GITHUB_REF,
-      path: filePath,
-      token: GITHUB_TOKEN,
-    });
+    },
+  };
 
-    if (gh.ok) {
-      const q = gh.json?.data?.fetchChallengePage;
-      if (q) {
-        title = String(q.title ?? title);
-        description = String(q.summary ?? description);
+  // Hard failure if missing envs
+  if (!GITHUB_TOKEN || !GITHUB_OWNER || !GITHUB_REPO) {
+    const msg =
+      "Missing GitHub env vars. Required: GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO. (GITHUB_BRANCH optional)";
+    console.error(msg, debug.githubEnv);
 
-        const img = q.coverImg;
-        if (img) {
-          const s = String(img).trim();
-          if (s) {
-            image = /^https?:\/\//i.test(s)
-              ? s
-              : `${siteUrl}${s.startsWith("/") ? s : `/${s}`}`;
-          }
-        }
-      }
-    } else {
-      console.error(gh.message, { apiUrl: gh.apiUrl, filePath });
-    }
-  } else {
-    console.error("Missing GitHub envs", {
-      hasToken: Boolean(GITHUB_TOKEN),
-      hasOwner: Boolean(GITHUB_OWNER),
-      hasRepo: Boolean(GITHUB_REPO),
-      ref: GITHUB_REF,
-    });
+    const html = `<!doctype html>
+<html><head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(title)}</title>
+  <meta property="og:title" content="${escapeHtml(title)}" />
+  <meta property="og:description" content="${escapeHtml(description)}" />
+  <meta property="og:url" content="${escapeHtml(canonicalUrl)}" />
+  <meta property="og:image" content="${escapeHtml(image)}" />
+</head><body>
+  <h1>${escapeHtml(title)}</h1>
+  <p>${escapeHtml(description)}</p>
+  <pre>${escapeHtml(msg)}</pre>
+  <pre>${escapeHtml(JSON.stringify(debug.githubEnv, null, 2))}</pre>
+</body></html>`;
+    return sendHtml(res, html);
   }
 
-  const canonicalUrl = `${siteUrl}${publicPath}`;
+  // Fetch quest file
+  const filePath = `public/quests/${questId}.json`;
+  const gh = await fetchQuestJsonRaw({
+    owner: GITHUB_OWNER,
+    repo: GITHUB_REPO,
+    ref: GITHUB_REF,
+    path: filePath,
+    token: GITHUB_TOKEN,
+  });
 
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader(
-    "Cache-Control",
-    "no-store, no-cache, must-revalidate, max-age=0",
-  );
+  if (gh.ok) {
+    // Adjust this based on your JSON shape.
+    // You currently expect: gh.json?.data?.fetchChallengePage
+    const q =
+      gh.json?.data?.fetchChallengePage ??
+      gh.json?.data?.fetchChallengeForSeo ??
+      gh.json;
+
+    if (q) {
+      title = String(q.title ?? title);
+      description = String(q.summary ?? q.description ?? description);
+
+      const img = q.coverImg ?? q.image;
+      if (img) {
+        const s = String(img).trim();
+        if (s) {
+          image = /^https?:\/\//i.test(s)
+            ? s
+            : `${siteUrl}${s.startsWith("/") ? s : `/${s}`}`;
+        }
+      }
+    }
+
+    console.log("GitHub fetch OK", {
+      questId,
+      filePath,
+      apiUrl: gh.apiUrl,
+      resolvedTitle: title,
+    });
+  } else {
+    // ✅ Proper, readable error logs for 401 etc.
+    console.error("GitHub fetch FAILED", {
+      questId,
+      filePath,
+      apiUrl: gh.apiUrl,
+      status: gh.status,
+      statusText: gh.statusText,
+      ghMessage: gh.ghMessage,
+      hint: gh.hint,
+      docs: gh.ghDocs,
+      token: redactToken(GITHUB_TOKEN),
+      owner: GITHUB_OWNER,
+      repo: GITHUB_REPO,
+      ref: GITHUB_REF,
+    });
+
+    // Also include a lightweight debug note in the HTML
+    debug.githubError = {
+      status: gh.status,
+      statusText: gh.statusText,
+      ghMessage: gh.ghMessage,
+      hint: gh.hint,
+      docs: gh.ghDocs,
+      apiUrl: gh.apiUrl,
+      filePath,
+    };
+  }
 
   const imageWidth = "1200";
   const imageHeight = "630";
@@ -184,7 +289,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   <meta property="og:title" content="${escapeHtml(title)}" />
   <meta property="og:description" content="${escapeHtml(description)}" />
   <meta property="og:url" content="${escapeHtml(canonicalUrl)}" />
-
   <meta property="og:image" content="${escapeHtml(image)}" />
   <meta property="og:image:secure_url" content="${escapeHtml(image)}" />
   <meta property="og:image:width" content="${imageWidth}" />
@@ -194,6 +298,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   <meta name="twitter:title" content="${escapeHtml(title)}" />
   <meta name="twitter:description" content="${escapeHtml(description)}" />
   <meta name="twitter:image" content="${escapeHtml(image)}" />
+
+  <!-- debug: ${escapeHtml(JSON.stringify(debug.githubError ?? {}, null, 0))} -->
 </head>
 <body>
   <h1>${escapeHtml(title)}</h1>
@@ -201,5 +307,5 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 </body>
 </html>`;
 
-  res.status(200).send(html);
+  return sendHtml(res, html);
 }

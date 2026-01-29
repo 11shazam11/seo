@@ -4,6 +4,19 @@
       "source": "/api/(.*)",
       "destination": "/api/$1"
     },
+
+    {
+      "source": "/quest/:id",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": ".*(Twitterbot|facebookexternalhit|Facebot|FacebookBot|Slackbot|Discordbot|LinkedInBot|WhatsApp|TelegramBot|Googlebot|bingbot|meta-externalagent|meta-externalfetcher).*"
+        }
+      ],
+      "destination": "/api/social_preview?id=:id&path=/quest/:id"
+    },
+
     {
       "source": "/(.*)",
       "has": [
@@ -15,6 +28,7 @@
       ],
       "destination": "/api/social_preview?path=/$1"
     },
+
     {
       "source": "/(.*)",
       "destination": "/index.html"

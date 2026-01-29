@@ -19,13 +19,44 @@ function normalizePath(p: unknown) {
 }
 
 /**
- * Extract id from: /quest12, /quest/12, /12, etc.
+ * Extract id from: /quest/100001577, /quest12, /12, etc.
  */
-function extractQuestId(path: string): number | null {
-  const m = path.match(/(\d+)/);
+function extractQuestIdFromString(s: string): number | null {
+  const m = String(s || "").match(/(\d+)/);
   if (!m) return null;
   const id = Number(m[1]);
   return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+/**
+ * Prefer: req.query.id (from rewrite). Fallback: req.query.path, then req.url.
+ */
+function getQuestId(req: VercelRequest): number | null {
+  // 1) Best: /quest/:id rewritten to /api/render/quest?id=:id
+  const qid = req.query?.id;
+  if (typeof qid === "string") {
+    const id = Number(qid);
+    if (Number.isFinite(id) && id > 0) return id;
+  }
+  if (Array.isArray(qid) && qid.length) {
+    const id = Number(qid[0]);
+    if (Number.isFinite(id) && id > 0) return id;
+  }
+
+  // 2) Fallback: old rewrite style ?path=/quest/100001577
+  const qpath = req.query?.path;
+  if (typeof qpath === "string") {
+    const id = extractQuestIdFromString(qpath);
+    if (id) return id;
+  }
+  if (Array.isArray(qpath) && qpath.length) {
+    const id = extractQuestIdFromString(qpath[0]);
+    if (id) return id;
+  }
+
+  // 3) Fallback: parse req.url
+  const urlPath = String(req.url || "");
+  return extractQuestIdFromString(urlPath);
 }
 
 async function fetchQuestJsonRaw(opts: {
@@ -44,7 +75,7 @@ async function fetchQuestJsonRaw(opts: {
   const res = await fetch(apiUrl, {
     headers: {
       Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github.raw+json", // ✅ key difference (no base64 handling)
+      Accept: "application/vnd.github.raw+json",
       "X-GitHub-Api-Version": "2022-11-28",
       "User-Agent": "vercel-og-renderer",
     },
@@ -55,9 +86,7 @@ async function fetchQuestJsonRaw(opts: {
     try {
       const err = await res.json();
       details = err?.message ? ` - ${err.message}` : "";
-    } catch {
-      // ignore parse failure
-    }
+    } catch {}
     return {
       ok: false as const,
       status: res.status,
@@ -66,7 +95,6 @@ async function fetchQuestJsonRaw(opts: {
     };
   }
 
-  // Since we used RAW accept header, this is the JSON file itself.
   const json = await res.json();
   return { ok: true as const, json, apiUrl };
 }
@@ -76,22 +104,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     process.env.SITE_URL || "https://seo-sbma.vercel.app",
   );
 
-  // Route param from rewrite: ?path=/quest/100001582
-  const path = normalizePath(req.query.path);
+  // ✅ Extract questId from the real URL (via rewrite id param)
+  const questId = getQuestId(req) ?? 100001577;
+
+  // ✅ The canonical public URL path should be /quest/<id>
+  const publicPath = `/quest/${questId}`;
 
   // Env
   const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
   const GITHUB_OWNER = process.env.GITHUB_OWNER || "";
   const GITHUB_REPO = process.env.GITHUB_REPO || "";
   const GITHUB_REF = process.env.GITHUB_BRANCH || "main";
-
-  if(GITHUB_TOKEN){
-    console.log(`Github token found : ${GITHUB_TOKEN}`);
-  }else{
-    console.log("Token not found");
-  }
-  // Quest id (fallback to a test id if missing)
-  const questId = extractQuestId(path) ?? 100001577;
 
   // Defaults
   let title = "My App";
@@ -118,10 +141,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const img = q.coverImg;
         if (img) {
           const s = String(img).trim();
-          if (s)
+          if (s) {
             image = /^https?:\/\//i.test(s)
               ? s
               : `${siteUrl}${s.startsWith("/") ? s : `/${s}`}`;
+          }
         }
       }
     } else {
@@ -136,9 +160,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  const canonicalUrl = `${siteUrl}${path.startsWith("/") ? path : `/${path}`}`;
+  const canonicalUrl = `${siteUrl}${publicPath}`;
 
-  // For debugging while you iterate (disable caching)
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader(
     "Cache-Control",

@@ -315,9 +315,75 @@ function normalizeSiteUrl(raw: string) {
   return String(raw || "").replace(/\/+$/, "");
 }
 
-function normalizePath(p: unknown) {
-  const s = String(p ?? "/");
-  return s.startsWith("/") ? s : `/${s}`;
+function decodeBase64ToUtf8(b64: string) {
+  return Buffer.from(b64, "base64").toString("utf8");
+}
+
+async function fetchGithubJsonFile(opts: {
+  owner: string;
+  repo: string;
+  branch: string;
+  filePath: string; // e.g. public/quests/100001584.json
+  token: string;
+}) {
+  const { owner, repo, branch, filePath, token } = opts;
+
+  const apiUrl = `https://api.github.com/repos/${encodeURIComponent(
+    owner,
+  )}/${encodeURIComponent(repo)}/contents/${filePath
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/")}?ref=${encodeURIComponent(branch)}`;
+
+  const r = await fetch(apiUrl, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "User-Agent": "vercel-og-renderer",
+    },
+  });
+
+  const remaining = r.headers.get("x-ratelimit-remaining");
+  const reset = r.headers.get("x-ratelimit-reset");
+
+  if (r.status === 404) return { ok: false as const, status: 404 as const };
+
+  if (!r.ok) {
+    const text = await r.text().catch(() => "");
+    return {
+      ok: false as const,
+      status: r.status,
+      message: `GitHub API error ${r.status}. remaining=${remaining ?? "?"}, reset=${reset ?? "?"}. body=${text.slice(
+        0,
+        300,
+      )}`,
+    };
+  }
+
+  const payload: any = await r.json();
+
+  if (
+    !payload ||
+    payload.type !== "file" ||
+    typeof payload.content !== "string"
+  ) {
+    return {
+      ok: false as const,
+      status: 500,
+      message: "Unexpected GitHub response shape (not a file).",
+    };
+  }
+
+  const raw = decodeBase64ToUtf8(payload.content.replace(/\n/g, ""));
+  try {
+    return { ok: true as const, json: JSON.parse(raw) };
+  } catch {
+    return {
+      ok: false as const,
+      status: 500,
+      message: "GitHub file is not valid JSON.",
+    };
+  }
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -325,29 +391,67 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     process.env.SITE_URL || "https://seo-sbma.vercel.app",
   );
 
-  const path = normalizePath(req.query.path);
+  // ✅ Hardcoded quest id for testing (NO extraction)
+  const TEST_QUEST_ID = 100001584;
 
-  // ✅ DEMO DATA (hard-coded)
-  const demoQuest = {
-    id: 100001584,
-    coverImg: "",
-    title: "Annotation test 003",
-    summary: "Annotation test 003",
-    deadline: 1769264700,
-    starttime: 1769009100,
-    last_modified_on: 1769006016,
-  };
+  // Vercel env vars
+  const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
+  const GITHUB_OWNER = process.env.GITHUB_OWNER || "";
+  const GITHUB_REPO = process.env.GITHUB_REPO || "";
+  const GITHUB_BRANCH = process.env.GITHUB_BRANCH || "main";
 
-  // Use demo data directly
-  const title = demoQuest.title;
-  const description = demoQuest.summary;
-  const image = demoQuest.coverImg
-    ? demoQuest.coverImg
-    : `${siteUrl}/og-default.png`;
+  // Defaults (fallback)
+  let title = "My App";
+  let description = "My app description";
+  let image = `${siteUrl}/og-default.png`;
 
-  const url = `${siteUrl}${path.startsWith("/") ? path : `/${path}`}`;
+  // ✅ Always attempt GitHub API fetch (for testing)
+  if (GITHUB_TOKEN && GITHUB_OWNER && GITHUB_REPO) {
+    // matches build output: public/quests/<id>.json
+    const filePath = `public/quests/${TEST_QUEST_ID}.json`;
 
-  // Cache headers (same as production)
+    const gh = await fetchGithubJsonFile({
+      owner: GITHUB_OWNER,
+      repo: GITHUB_REPO,
+      branch: GITHUB_BRANCH,
+      filePath,
+      token: GITHUB_TOKEN,
+    });
+
+    if (gh.ok) {
+      // expected shape: { data: { fetchChallengePage: { title, summary, coverImg } } }
+      const q = gh.json?.data?.fetchChallengePage;
+
+      if (q) {
+        title = String(q.title ?? title);
+        description = String(q.summary ?? description);
+
+        const img = q.coverImg;
+        if (img) {
+          const s = String(img);
+          image = /^https?:\/\//i.test(s)
+            ? s
+            : `${siteUrl}${s.startsWith("/") ? s : `/${s}`}`;
+        }
+      }
+    } else if (gh.status !== 404) {
+      console.error("GitHub fetch failed:", (gh as any).message || gh);
+    }
+  } else {
+    console.error(
+      "Missing GitHub envs:",
+      JSON.stringify({
+        hasToken: Boolean(GITHUB_TOKEN),
+        hasOwner: Boolean(GITHUB_OWNER),
+        hasRepo: Boolean(GITHUB_REPO),
+        branch: GITHUB_BRANCH,
+      }),
+    );
+  }
+
+  // Keep a stable canonical URL for previews (can be anything in testing)
+  const url = `${siteUrl}/quest/${TEST_QUEST_ID}`;
+
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader(
     "Cache-Control",
